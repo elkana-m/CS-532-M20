@@ -15,3 +15,11 @@ def insertion_sort_desc(arr) -> list[int]:
         arr[i + 1] = key
 
     return arr
+
+
+# array to be sorted
+numbers = [5, 2, 4, 6, 1, 3]
+
+print(f"\noriginal array: {numbers}")
+sorted_numbers = insertion_sort_desc(numbers)
+print(f"sorted array: {sorted_numbers}\n")
