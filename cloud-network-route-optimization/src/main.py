@@ -113,6 +113,66 @@ def run_demonstration() -> None:
         "  Route changed after latency update: "
         f"{restored['total_latency']} ms -> {updated['total_latency']} ms"
     )
+
+    _print_section("PHASE 3 OPTIMIZATION DEMONSTRATION")
+    # Fresh optimizer so cache stats reflect only this section
+    phase2 = CloudRouteOptimizer(graph, cache_capacity=128)
+    version_before = graph.topology_version
+
+    first = phase2.shortest_path(source, destination)
+    metrics_first = phase2.last_run_metrics()
+    info_first = phase2.cache_info()
+    print("  1) First route request (cache miss — Dijkstra runs)")
+    _print_route("    Result", first)
+    print(f"    Cache hit:          {metrics_first['cache_hit']}")
+    print(f"    Dijkstra executed:  {metrics_first['dijkstra_executed']}")
+    print(f"    Nodes settled:      {metrics_first['nodes_settled']}")
+    print(f"    Edges examined:     {metrics_first['edges_examined']}")
+    print(
+        f"    Cache stats:        hits={info_first['hits']} "
+        f"misses={info_first['misses']} size={info_first['current_size']}"
+    )
+
+    second = phase2.shortest_path(source, destination)
+    metrics_second = phase2.last_run_metrics()
+    info_second = phase2.cache_info()
+    print("  2) Repeated route request (cache hit)")
+    _print_route("    Result", second)
+    print(f"    Cache hit:          {metrics_second['cache_hit']}")
+    print(f"    Same path/latency:  {second == first}")
+    print(
+        f"    Cache stats:        hits={info_second['hits']} "
+        f"misses={info_second['misses']} size={info_second['current_size']}"
+    )
+    assert second == first
+    assert metrics_second["cache_hit"] is True
+
+    print("  3) Link latency update (topology version changes)")
+    print(f"    Topology version before: {version_before}")
+    print(f"  {graph.add_link('AWS US-East', 'Google Cloud Iowa', 40)}")
+    print(f"    Topology version after:  {graph.topology_version}")
+    assert graph.topology_version > version_before
+
+    third = phase2.shortest_path(source, destination)
+    metrics_third = phase2.last_run_metrics()
+    info_third = phase2.cache_info()
+    print("  4) New optimized route after invalidation")
+    _print_route("    Result", third)
+    print(f"    Cache hit:          {metrics_third['cache_hit']}")
+    print(f"    Dijkstra executed:  {metrics_third['dijkstra_executed']}")
+    print(f"    Previous cache unused: {metrics_third['cache_hit'] is False}")
+    print(
+        f"  5) Cache stats: hits={info_third['hits']} "
+        f"misses={info_third['misses']} size={info_third['current_size']}"
+        f"/{info_third['capacity']}"
+    )
+    print(
+        f"     Route metrics: settled={metrics_third['nodes_settled']} "
+        f"edges={metrics_third['edges_examined']} "
+        f"heap_push={metrics_third['heap_pushes']} "
+        f"heap_pop={metrics_third['heap_pops']}"
+    )
+    assert metrics_third["cache_hit"] is False
     print()
 
 
