@@ -98,14 +98,60 @@ screenshots:
 
 ## How to Run Tests
 
-From the project root:
+From the project root (optionally add `-v` to the end so each test case name is printed as it runs):
 
 ```bash
-python -m unittest discover -s tests
+python -m unittest discover -s tests -v
+```
+
+Run a single file with the same verbose output:
+
+```bash
+python -m unittest tests.test_network_graph -v
+python -m unittest tests.test_route_optimizer -v
+python -m unittest tests.test_failover -v
 ```
 
 Tests use Python’s built-in `unittest` module; no third-party test runner is
 required.
+
+### Test cases
+
+**`tests/test_network_graph.py`** — graph management and BFS
+
+- `test_empty_network`
+- `test_adding_a_datacenter`
+- `test_adding_same_datacenter_twice`
+- `test_adding_and_retrieving_a_link`
+- `test_updating_link_latency`
+- `test_negative_latency_rejection`
+- `test_self_link_rejection`
+- `test_removing_an_existing_link`
+- `test_removing_a_missing_link`
+- `test_unknown_neighbor_lookup`
+- `test_bfs_source_equals_destination`
+- `test_bfs_disconnected_nodes`
+- `test_adjacency_returns_safe_copy`
+
+**`tests/test_route_optimizer.py`** — Dijkstra shortest-path
+
+- `test_lowest_latency_route_selection`
+- `test_multiple_routes_different_costs`
+- `test_equal_cost_alternative_routes`
+- `test_unknown_source`
+- `test_unknown_destination`
+- `test_source_equals_destination`
+- `test_unreachable_destination`
+- `test_correct_path_reconstruction`
+- `test_correct_total_latency`
+
+**`tests/test_failover.py`** — failure, failover, and latency updates
+
+- `test_link_failure_with_valid_alternate_route`
+- `test_link_failure_with_no_remaining_route`
+- `test_route_recalculation_after_failure`
+- `test_route_restoration`
+- `test_route_change_after_latency_update`
 
 ## Current Limitations
 
