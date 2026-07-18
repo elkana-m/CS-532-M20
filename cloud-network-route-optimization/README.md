@@ -65,16 +65,23 @@ cheaper than a full weighted search when only connectivity matters.
 cloud-network-route-optimization/
 ├── src/
 │   ├── __init__.py
-│   ├── models.py              # RouteResult TypedDict
-│   ├── network_graph.py       # Topology + BFS reachability
-│   ├── route_optimizer.py     # Dijkstra shortest-path
-│   ├── sample_topology.py     # Example datacenters and links
-│   └── main.py                # Proof-of-concept demonstration
+│   ├── models.py                 # RouteResult TypedDict
+│   ├── network_graph.py          # Topology + BFS + controlled access
+│   ├── route_optimizer.py        # Dijkstra + LRU caches + metrics
+│   ├── sample_topology.py        # Example datacenters and links
+│   ├── topology_generator.py     # Synthetic sparse/dense networks
+│   └── main.py                   # Phase 2 + Phase 3 demonstration
 ├── tests/
 │   ├── __init__.py
 │   ├── test_network_graph.py
 │   ├── test_route_optimizer.py
-│   └── test_failover.py
+│   ├── test_failover.py
+│   ├── test_phase2_optimizations.py
+│   └── test_stress.py
+├── benchmarks/
+│   ├── __init__.py
+│   └── benchmark_routes.py
+├── benchmark_results.csv         # Written by the benchmark runner
 ├── README.md
 └── requirements.txt
 ```
@@ -95,10 +102,11 @@ screenshots:
 - `LINK FAILURE SIMULATION`
 - `FAILOVER ROUTE`
 - `LATENCY UPDATE`
+- `PHASE 3 OPTIMIZATION DEMONSTRATION`
 
 ## How to Run Tests
 
-From the project root (optionally add `-v` to the end so each test case name is printed as it runs):
+From the project root (optionally add `-v` so each test case name is printed):
 
 ```bash
 python -m unittest discover -s tests -v
@@ -110,6 +118,8 @@ Run a single file with the same verbose output:
 python -m unittest tests.test_network_graph -v
 python -m unittest tests.test_route_optimizer -v
 python -m unittest tests.test_failover -v
+python -m unittest tests.test_phase2_optimizations -v
+python -m unittest tests.test_stress -v
 ```
 
 Tests use Python’s built-in `unittest` module; no third-party test runner is
@@ -153,19 +163,119 @@ required.
 - `test_route_restoration`
 - `test_route_change_after_latency_update`
 
+**`tests/test_phase2_optimizations.py`** — caching, versioning, no full-graph copy
+
+**`tests/test_stress.py`** — large/sparse/chain/star topologies and cache stress
+
+## Phase 3: Performance Optimization and Scalability
+
+Phase 2 copied the entire adjacency list (`O(V + E)` time and memory) before
+every Dijkstra call via `CloudNetworkGraph.adjacency`. On large topologies that
+copy dominated route calculation and allocated a full duplicate of the graph
+on each query.
+
+### Controlled neighbor access
+
+`CloudRouteOptimizer` no longer reads `adjacency`. It uses:
+
+- `contains_datacenter()` — O(1) average membership
+- `iter_neighbors()` — iterate edges in place without copying the graph
+- `datacenters()` / `datacenter_count()` / `link_count()` — lightweight metadata
+
+The `adjacency` property remains for debugging and tests only.
+
+### Topology versioning
+
+`CloudNetworkGraph.topology_version` increments only when the graph actually
+changes (new datacenter, new link, real latency change, successful link
+removal). Duplicate datacenter inserts, missing-link removals, and same-latency
+re-asserts do not bump the version. Route cache keys include this version so
+stale results cannot be reused after mutations.
+
+### Bounded LRU route caching
+
+`CloudRouteOptimizer` keeps an `OrderedDict` LRU of
+
+`(source, destination, topology_version) -> RouteResult`
+
+with a configurable `cache_capacity` (default 128; `0` disables caching).
+
+- Hits move entries to the most-recent end
+- Inserts evict the least-recently used entry when over capacity
+- Returned results defensively copy the path list
+- Obsolete-version entries are purged periodically
+
+An optional small **source-tree LRU** (default 16 entries) memoizes a full
+single-source Dijkstra tree so many destinations from one source share one
+shortest-path computation. Each tree costs `O(V)` memory, so the bound prevents
+`O(V²)` growth.
+
+### Why the cache is bounded
+
+Unbounded `(source, destination)` maps grow without limit under exploratory or
+automated workloads. A fixed capacity caps memory while still accelerating the
+hot routes a control plane revisits.
+
+### Theoretical complexity
+
+```text
+Graph storage: O(V + E)
+Dijkstra with binary heap: O((V + E) log V)
+BFS reachability: O(V + E)
+Uncached route space: O(V + E)
+Cached repeated route lookup: approximately O(1), excluding safe result copying
+```
+
+A cache hit may still take `O(P)` time to copy a returned path of length `P`
+when defensive copying is used.
+
+### Benchmark methodology
+
+`python -m benchmarks.benchmark_routes` generates connected sparse networks
+(100 → 10,000 nodes), compares uncached Dijkstra, cold optimized miss, warm
+cache hit, and post-mutation recalculation, records median `perf_counter`
+runtime and `tracemalloc` peak memory, and writes `benchmark_results.csv`.
+
+### Stress-testing approach
+
+`tests/test_stress.py` exercises thousands of nodes, chain/star shapes,
+disconnects, equal-cost paths, rapid failure/restore, latency churn, cache
+eviction/invalidation, and extreme latencies—asserting correctness, not
+machine-specific timing thresholds.
+
+### Memory-management strategy
+
+- Adjacency list (not dense matrices) for sparse cloud topologies
+- No full-graph copy on the routing hot path
+- Bounded route and source-tree LRUs
+- Incremental `link_count` / topology version metadata
+- Synthetic generators prefer sparse connected graphs
+
+### Current Phase 3 limitations
+
+- Caches are process-local (no shared/distributed cache)
+- Source-tree memoization trades early-exit Dijkstra for multi-destination reuse
+  when enabled
+- Benchmarks measure Python-level time/memory, not kernel networking
+- Still no live cloud APIs, multi-metric costs, or persistence layer
+
+## How to Run Benchmarks
+
+```bash
+python -m benchmarks.benchmark_routes
+```
+
 ## Current Limitations
 
-- Topology is static and hand-built (no live cloud APIs)
+- No live cloud provider APIs or telemetry
 - Only latency is modeled (no bandwidth, loss, or congestion)
-- Single-link failure scenarios are demonstrated; multi-failure sets are not
-- No route caching, persistence, CLI flags, or visualization layer
+- Single-process in-memory topology
 - Not a production control-plane or SDN controller
 
 ## Future Extensions
 
-- Larger generated network topologies and performance benchmarking
-- Route caching and incremental recomputation
-- Multiple simultaneous link failures
+- Multi-failure scenarios and priority-aware failover policies
 - Additional routing metrics (bandwidth, packet loss, congestion)
+- Incremental / dynamic shortest-path algorithms
 - CLI, web interface, or visualization layer
 - Optional integration with cloud provider network telemetry
